@@ -1,0 +1,44 @@
+[package]
+name = "host"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+default-net = "0.11.0"
+gotham = { version = "0.7.1", default-features = false, features = ["derive", "session", "rustls"] }
+url = "2.2.2"
+format_xml = "0.2"
+time = "0.3.12"
+serde = { version = "1.0.142", features = ["derive"] }
+ron = "0.7.1"
+xdg = "2.4.1"
+hostname = "0.3.1"
+hex = "0.4.3"
+openssl = { version = "0.10", features = ["vendored"] }
+rustyline = "10.0.0"
+tokio = { version = "1.11", features = ["rt", "macros"] }
+rustls = { version = "0.20", features = ["dangerous_configuration"] }
+log = "0.4"
+simplelog = "0.12"
+rtsp-types = "0.0.3"
+slog = "2.1.1"
+slog-scope = "4.4.0"
+slog-stdlog = "4.1.0"
+wayland-backend = { version = "0.1.0-beta.10" }
+wayland-scanner = { version = "0.30.0-beta.10" }
+
+[dependencies.uuid]
+version = "1.1.2"
+features = ["v4", "fast-rng", "serde"]
+
+[dependencies.smithay]
+git = "https://github.com/smithay/Smithay"
+rev = "98bbc48e"
+default-features = false
+features = ["backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "desktop", "renderer_gl", "wayland_frontend"]
+
+[patch.crates-io]
+rtsp-types = { path = "../rtsp-types" }

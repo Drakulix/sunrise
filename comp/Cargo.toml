@@ -1,0 +1,22 @@
+[package]
+name = "sunrise"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wayland-protocols-wlr = { version = "0.1.0-beta.5", features = ["server"] }
+wayland-backend = { version = "0.1.0-beta.4" }
+wayland-scanner = { version = "0.30.0-beta.6" }
+clap = { version = "3.2.5", features = ["derive", "cargo"] }
+slog = "2.1.1"
+slog-scope = "4.4.0"
+slog-stdlog = "4.1.0"
+slog-term = "2.9.0"
+
+[dependencies.smithay]
+git = "https://github.com/smithay/Smithay"
+rev = "623ab10" 
+default-features = false
+features = [ "backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "renderer_gl", "use_system_lib", "desktop", "wayland_frontend" ]

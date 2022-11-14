@@ -1,0 +1,31 @@
+[package]
+name = "enet"
+version = "0.3.0"
+authors = ["Felix Rath <felixm.rath@gmail.com>"]
+edition = "2021"
+description = "High-level, rust-y bindings to the ENet library"
+documentation = "https://www.docs.rs/enet"
+homepage = "https://github.com/futile/enet-rs"
+repository = "https://github.com/futile/enet-rs"
+readme = "README.md"
+keywords = ["network", "gamedev"]
+categories = ["game-engines", "network-programming"]
+license = "Apache-2.0 OR MIT"
+exclude = [
+        ".github/", # ignore github workflows
+        "flake.nix", # ignore nix flake files
+        "flake.lock",
+        "check.sh", # ignore check script
+        "rustfmt.toml", # ignore rustfmt config
+]
+
+[badges]
+maintenance = { status = "passively-maintained" }
+
+[dependencies]
+enet-sys = { version = "1.0.0", path = "../enet-sys" }
+thiserror = "1.0.30"
+
+[dev-dependencies]
+anyhow = "1.0.56"
+lazy_static = "1.4.0"
