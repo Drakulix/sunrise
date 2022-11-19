@@ -1,0 +1,40 @@
+[package]
+name = "gst-plugin-wayland-display"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "GStreamer Wayland Compositor Plugin"
+repository = "https://github.com/drakulix/sunrise"
+
+[lib]
+name = "gstwaylanddisplay"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[features]
+static = []
+capi = []
+doc = ["gst/v1_18"]
+
+[dependencies]
+gst = { version = "0.19.2", package="gstreamer" }
+gst-base = { version = "0.19.2", package="gstreamer-base" }
+#gst-allocators = { version = "0.19.2", package="gstreamer-allocators" }
+#gst-gl = { version = "0.19.2", package="gstreamer-gl" }
+gst-video = { version = "0.19.2", package="gstreamer-video" }
+
+[build-dependencies]
+gst-plugin-version-helper = "0.7.5"
+
+[package.metadata.capi]
+min_version = "0.8.0"
+
+[package.metadata.capi.header]
+enabled = false
+
+[package.metadata.capi.library]
+install_subdir = "gstreamer-1.0"
+versioning = false
+
+[package.metadata.capi.pkg_config]
+requires_private = "gstreamer-1.0, gstreamer-base-1.0, gstreamer-video-1.0, gobject-2.0, glib-2.0, gmodule-2.0"
