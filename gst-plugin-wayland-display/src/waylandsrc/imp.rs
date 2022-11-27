@@ -1,9 +1,13 @@
+use std::sync::{mpsc::Receiver, Mutex};
+use std::thread::JoinHandle;
+
+use smithay::reexports::calloop::channel::Sender;
+
 use gst::glib;
 use gst::glib::once_cell::sync::Lazy;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 
-use gst_base::prelude::*;
 use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
 
@@ -15,8 +19,64 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     )
 });
 
-#[derive(Default)]
-pub struct WaylandDisplaySrc {}
+static VIDEO_INFO: Lazy<gst_video::VideoInfo> = Lazy::new(|| {
+    gst_video::VideoInfo::builder(gst_video::VideoFormat::Rgbx, 1920, 1080)
+        //.par(gst::Fraction::new(1, 1))
+        .fps(gst::Fraction::new(60, 1))
+        .build()
+        .expect("Failed to create video info")
+});
+
+pub struct SlogGstDrain;
+
+impl slog::Drain for SlogGstDrain {
+    type Ok = ();
+    type Err = std::convert::Infallible;
+
+    fn log(
+        &self,
+        record: &slog::Record,
+        _values: &slog::OwnedKVList,
+    ) -> std::result::Result<Self::Ok, Self::Err> {
+        CAT.log::<super::WaylandDisplaySrc>(
+            None,
+            match record.level() {
+                slog::Level::Critical | slog::Level::Error => gst::DebugLevel::Error,
+                slog::Level::Warning => gst::DebugLevel::Warning,
+                slog::Level::Info => gst::DebugLevel::Info,
+                slog::Level::Debug => gst::DebugLevel::Debug,
+                slog::Level::Trace => gst::DebugLevel::Trace,
+            },
+            record.file(),
+            record.module(),
+            record.line(),
+            *record.msg(),
+        );
+        Ok(())
+    }
+}
+
+pub struct WaylandDisplaySrc {
+    state: Mutex<Option<State>>,
+}
+
+impl Default for WaylandDisplaySrc {
+    fn default() -> Self {
+        WaylandDisplaySrc {
+            state: Mutex::new(None),
+        }
+    }
+}
+
+pub struct State {
+    thread_handle: JoinHandle<()>,
+    command_tx: Sender<Command>,
+    buffer_rx: Receiver<gst::Buffer>,
+}
+
+pub enum Command {
+    Quit,
+}
 
 #[glib::object_subclass]
 impl ObjectSubclass for WaylandDisplaySrc {
@@ -63,12 +123,7 @@ impl ElementImpl for WaylandDisplaySrc {
 
     fn pad_templates() -> &'static [gst::PadTemplate] {
         static PAD_TEMPLATES: Lazy<Vec<gst::PadTemplate>> = Lazy::new(|| {
-            let caps = gst_video::VideoCapsBuilder::new()
-                .format(gst_video::VideoFormat::Nv12)
-                .width(1920)
-                .height(1080)
-                .framerate(gst::Fraction::new(1, 60))
-                .build();
+            let caps = VIDEO_INFO.to_caps().unwrap();
             let src_pad_template = gst::PadTemplate::new(
                 "src",
                 gst::PadDirection::Src,
@@ -82,15 +137,71 @@ impl ElementImpl for WaylandDisplaySrc {
 
         PAD_TEMPLATES.as_ref()
     }
+
+    fn change_state(
+        &self,
+        transition: gst::StateChange,
+    ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
+        let res = self.parent_change_state(transition);
+        match dbg!(res) {
+            Ok(gst::StateChangeSuccess::Success) => {
+                if transition.next() == gst::State::Paused {
+                    // this is a live source
+                    Ok(gst::StateChangeSuccess::NoPreroll)
+                } else {
+                    Ok(gst::StateChangeSuccess::Success)
+                }
+            }
+            x => x,
+        }
+    }
 }
 
 impl BaseSrcImpl for WaylandDisplaySrc {
     fn start(&self) -> Result<(), gst::ErrorMessage> {
+        let mut state = self.state.lock().unwrap();
+        if state.is_some() {
+            return Ok(());
+        }
+
+        let (buffer_tx, buffer_rx) = std::sync::mpsc::sync_channel(1);
+        let (command_tx, command_src) = smithay::reexports::calloop::channel::channel();
+        let thread_handle = std::thread::spawn(move || {
+            super::comp::init(
+                buffer_tx,
+                command_src,
+                //TODO: Make all of this configurable
+                String::from("/dev/dri/renderD128"),
+                "seat-0",
+                VIDEO_INFO.clone(),
+            )
+        });
+        *state = Some(State {
+            thread_handle,
+            buffer_rx,
+            command_tx,
+        });
+
         Ok(())
     }
 
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
+        let mut state = self.state.lock().unwrap();
+        if let Some(state) = state.take() {
+            if let Err(err) = state.command_tx.send(Command::Quit) {
+                gst::warning!(CAT, "Failed to send stop command: {}", err);
+                return Ok(());
+            };
+            if state.thread_handle.join().is_err() {
+                gst::warning!(CAT, "Failed to join compositor thread");
+            };
+        }
+
         Ok(())
+    }
+
+    fn is_seekable(&self) -> bool {
+        false
     }
 }
 
@@ -99,6 +210,13 @@ impl PushSrcImpl for WaylandDisplaySrc {
         &self,
         _buffer: Option<&mut gst::BufferRef>,
     ) -> Result<CreateSuccess, gst::FlowError> {
-        Err(gst::FlowError::Eos)
+        match self.state.lock().unwrap().as_mut() {
+            Some(state) => state
+                .buffer_rx
+                .recv()
+                .map(|buffer| CreateSuccess::NewBuffer(buffer))
+                .map_err(|_| gst::FlowError::Eos),
+            None => Err(gst::FlowError::Eos),
+        }
     }
 }

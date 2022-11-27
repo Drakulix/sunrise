@@ -22,6 +22,13 @@ gst-base = { version = "0.19.2", package="gstreamer-base" }
 #gst-allocators = { version = "0.19.2", package="gstreamer-allocators" }
 #gst-gl = { version = "0.19.2", package="gstreamer-gl" }
 gst-video = { version = "0.19.2", package="gstreamer-video" }
+slog = "2.7.0"
+
+[dependencies.smithay]
+git = "https://github.com/smithay/Smithay"
+rev = "0c109544b1"
+default-features = false
+features = [ "backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "renderer_gl", "use_system_lib", "desktop", "wayland_frontend" ]
 
 [build-dependencies]
 gst-plugin-version-helper = "0.7.5"
