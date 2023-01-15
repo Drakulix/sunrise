@@ -18,6 +18,7 @@ use smithay::{
         wayland_server::protocol::wl_pointer,
     },
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
+    wayland::seat::WaylandFocus,
 };
 use std::{os::unix::io::RawFd, path::Path};
 
@@ -169,7 +170,7 @@ impl State {
                 .map(|(w, p)| (w.clone(), p))
             {
                 self.space.raise_element(&window, true);
-                keyboard.set_focus(self, Some(window.toplevel().wl_surface().clone()), serial);
+                keyboard.set_focus(self, window.wl_surface(), serial);
                 return;
             }
         }

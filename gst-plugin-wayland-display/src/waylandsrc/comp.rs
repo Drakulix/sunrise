@@ -28,7 +28,7 @@ use smithay::{
     delegate_shm, delegate_viewporter, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, space::render_output, PopupKeyboardGrab, PopupKind, PopupManager,
-        PopupPointerGrab, PopupUngrabStrategy, Space, Window,
+        PopupPointerGrab, PopupUngrabStrategy, Space,
     },
     input::{keyboard::XkbConfig, pointer::Focus, Seat, SeatHandler, SeatState},
     output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
@@ -56,6 +56,7 @@ use smithay::{
         },
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError},
         output::OutputManagerState,
+        seat::WaylandFocus,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceData, XdgShellHandler,
             XdgShellState, XdgToplevelSurfaceData,
@@ -67,8 +68,10 @@ use smithay::{
 };
 
 mod input;
+mod window;
 
 use self::input::*;
+use self::window::*;
 
 struct ClientState;
 impl ClientData for ClientState {
@@ -134,7 +137,7 @@ impl CompositorHandler for State {
         if let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().wl_surface() == surface)
+            .find(|w| w.wl_surface().as_ref() == Some(surface))
         {
             window.on_commit();
         }
@@ -144,9 +147,11 @@ impl CompositorHandler for State {
         if let Some(idx) = self
             .pending_windows
             .iter_mut()
-            .position(|w| w.toplevel().wl_surface() == surface)
+            .position(|w| w.wl_surface().as_ref() == Some(surface))
         {
-            let window = self.pending_windows.swap_remove(idx);
+            let Window::Wayland(window) = self.pending_windows.swap_remove(idx) else {
+                return;
+            };
 
             let toplevel = window.toplevel();
             let (initial_configure_sent, max_size) = with_states(surface, |states| {
@@ -177,7 +182,7 @@ impl CompositorHandler for State {
                     state.states.set(XdgState::Activated);
                 });
                 toplevel.send_configure();
-                self.pending_windows.push(window);
+                self.pending_windows.push(Window::Wayland(window));
             } else {
                 let window_size = toplevel.current_state().size.unwrap_or((0, 0).into());
                 let output_size: Size<i32, _> = self
@@ -192,7 +197,7 @@ impl CompositorHandler for State {
                     (output_size.w / 2) - (window_size.w / 2),
                     (output_size.h / 2) - (window_size.h / 2),
                 );
-                self.space.map_element(window, loc, false);
+                self.space.map_element(Window::Wayland(window), loc, false);
             }
 
             return;
@@ -275,7 +280,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let window = Window::new(surface);
+        let window = Window::from(surface);
         self.pending_windows.push(window);
     }
 
