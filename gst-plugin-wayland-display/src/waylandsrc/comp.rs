@@ -1,4 +1,8 @@
-use std::{os::unix::prelude::AsRawFd, path::PathBuf, sync::mpsc::SyncSender};
+use std::{
+    os::unix::prelude::{AsRawFd, OwnedFd},
+    path::PathBuf,
+    sync::mpsc::SyncSender,
+};
 
 use super::imp::Command;
 use slog::Drain;
@@ -6,25 +10,25 @@ use smithay::{
     backend::{
         allocator::{
             dmabuf::{AsDmabuf, Dmabuf},
-            gbm::{GbmBuffer, GbmDevice},
+            gbm::GbmDevice,
             Fourcc, Swapchain,
         },
-        drm::{DrmNode, NodeType},
+        drm::{DrmDeviceFd, DrmNode, NodeType},
         egl::{EGLContext, EGLDisplay},
         libinput::LibinputInputBackend,
         renderer::{
             damage::{DamageTrackedRenderer, DamageTrackedRendererError as DTRError},
             element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
             gles2::Gles2Renderer,
-            utils::{import_surface_tree, on_commit_buffer_handler, with_renderer_surface_state},
+            utils::{import_surface_tree, on_commit_buffer_handler},
             Bind, ExportMem, ImportDma, ImportMemWl, Unbind,
         },
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
     delegate_shm, delegate_viewporter, delegate_xdg_shell,
     desktop::{
-        find_popup_root_surface, space::render_output, Kind as SurfaceKind, PopupKeyboardGrab,
-        PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy, Space, Window,
+        find_popup_root_surface, space::render_output, PopupKeyboardGrab, PopupKind, PopupManager,
+        PopupPointerGrab, PopupUngrabStrategy, Space, Window,
     },
     input::{keyboard::XkbConfig, pointer::Focus, Seat, SeatHandler, SeatState},
     output::{Mode as OutputMode, Output, PhysicalProperties, Subpixel},
@@ -42,15 +46,15 @@ use smithay::{
             Display, DisplayHandle, Resource,
         },
     },
-    utils::{Logical, Physical, Point, Rectangle, Serial, Size, Transform},
+    utils::{DeviceFd, Logical, Physical, Point, Rectangle, Serial, Size, Transform},
     wayland::{
         buffer::BufferHandler,
-        compositor::{get_children, with_states, CompositorHandler, CompositorState},
+        compositor::{with_states, CompositorHandler, CompositorState},
         data_device::{
             set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
             ServerDndGrabHandler,
         },
-        dmabuf::{get_dmabuf, DmabufGlobal, DmabufHandler, DmabufState, ImportError},
+        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportError},
         output::OutputManagerState,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgPopupSurfaceData, XdgShellHandler,
@@ -88,7 +92,7 @@ struct State {
     dtr: DamageTrackedRenderer,
     renderer: Gles2Renderer,
     dmabuf_global: DmabufGlobal,
-    swapchain: Swapchain<GbmDevice<std::fs::File>, GbmBuffer<()>>,
+    swapchain: Swapchain<GbmDevice<DrmDeviceFd>>,
     direct_scanout: bool,
 
     // management
@@ -144,53 +148,51 @@ impl CompositorHandler for State {
         {
             let window = self.pending_windows.swap_remove(idx);
 
-            #[cfg_attr(not(feature = "xwayland"), allow(irrefutable_let_patterns))]
-            if let SurfaceKind::Xdg(ref toplevel) = window.toplevel() {
-                let (initial_configure_sent, max_size) = with_states(surface, |states| {
-                    let attributes = states.data_map.get::<XdgToplevelSurfaceData>().unwrap();
-                    let attributes_guard = attributes.lock().unwrap();
+            let toplevel = window.toplevel();
+            let (initial_configure_sent, max_size) = with_states(surface, |states| {
+                let attributes = states.data_map.get::<XdgToplevelSurfaceData>().unwrap();
+                let attributes_guard = attributes.lock().unwrap();
 
-                    (
-                        attributes_guard.initial_configure_sent,
-                        attributes_guard.max_size,
-                    )
-                });
-                if !initial_configure_sent {
-                    if max_size.w == 0 && max_size.h == 0 {
-                        toplevel.with_pending_state(|state| {
-                            state.size = Some(
-                                self.output
-                                    .current_mode()
-                                    .unwrap()
-                                    .size
-                                    .to_f64()
-                                    .to_logical(self.output.current_scale().fractional_scale())
-                                    .to_i32_round(),
-                            );
-                            state.states.set(XdgState::Fullscreen);
-                        });
-                    }
+                (
+                    attributes_guard.initial_configure_sent,
+                    attributes_guard.max_size,
+                )
+            });
+            if !initial_configure_sent {
+                if max_size.w == 0 && max_size.h == 0 {
                     toplevel.with_pending_state(|state| {
-                        state.states.set(XdgState::Activated);
+                        state.size = Some(
+                            self.output
+                                .current_mode()
+                                .unwrap()
+                                .size
+                                .to_f64()
+                                .to_logical(self.output.current_scale().fractional_scale())
+                                .to_i32_round(),
+                        );
+                        state.states.set(XdgState::Fullscreen);
                     });
-                    toplevel.send_configure();
-                    self.pending_windows.push(window);
-                } else {
-                    let window_size = toplevel.current_state().size.unwrap_or((0, 0).into());
-                    let output_size: Size<i32, _> = self
-                        .output
-                        .current_mode()
-                        .unwrap()
-                        .size
-                        .to_f64()
-                        .to_logical(self.output.current_scale().fractional_scale())
-                        .to_i32_round();
-                    let loc = (
-                        (output_size.w / 2) - (window_size.w / 2),
-                        (output_size.h / 2) - (window_size.h / 2),
-                    );
-                    self.space.map_element(window, loc, false);
                 }
+                toplevel.with_pending_state(|state| {
+                    state.states.set(XdgState::Activated);
+                });
+                toplevel.send_configure();
+                self.pending_windows.push(window);
+            } else {
+                let window_size = toplevel.current_state().size.unwrap_or((0, 0).into());
+                let output_size: Size<i32, _> = self
+                    .output
+                    .current_mode()
+                    .unwrap()
+                    .size
+                    .to_f64()
+                    .to_logical(self.output.current_scale().fractional_scale())
+                    .to_i32_round();
+                let loc = (
+                    (output_size.w / 2) - (window_size.w / 2),
+                    (output_size.h / 2) - (window_size.h / 2),
+                );
+                self.space.map_element(window, loc, false);
             }
 
             return;
@@ -273,7 +275,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let window = Window::new(SurfaceKind::Xdg(surface));
+        let window = Window::new(surface);
         self.pending_windows.push(window);
     }
 
@@ -366,12 +368,15 @@ impl State {
         */
 
         let elements = vec![MemoryRenderBufferRenderElement::from_buffer(
+            &mut self.renderer,
             self.pointer_location.to_physical_precise_round(1),
             &self.cursor_element,
             None,
             None,
             None,
-        )];
+            None,
+        )
+        .map_err(DTRError::Rendering)?];
 
         let offscreen = self
             .swapchain
@@ -435,8 +440,6 @@ pub fn init(
 
     // init render backend
     let drm_node = DrmNode::from_path(&node).expect("Invalid render node path");
-
-    // GBM device code path
     let drm_file = std::fs::File::open(
         drm_node
             .dev_path_with_type(NodeType::Render)
@@ -444,10 +447,13 @@ pub fn init(
             .unwrap_or_else(|| node),
     )
     .expect("Failed to open drm device");
-    let gbm_device = GbmDevice::new(drm_file).expect("Failed to open gbm device");
+
+    // GBM device code path
+    let drm_fd = DrmDeviceFd::new(DeviceFd::from(OwnedFd::from(drm_file)), None);
+    let gbm_device = GbmDevice::new(drm_fd).expect("Failed to open gbm device");
 
     let egl =
-        unsafe { EGLDisplay::new(&gbm_device, log.clone()).expect("Failed to create EGLDisplay") };
+        EGLDisplay::new(gbm_device.clone(), log.clone()).expect("Failed to create EGLDisplay");
     let context = EGLContext::new(&egl, log.clone()).expect("Failed to create EGLContext");
 
     let modifiers = context

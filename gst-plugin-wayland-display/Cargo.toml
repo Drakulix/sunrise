@@ -26,9 +26,9 @@ slog = "2.7.0"
 
 [dependencies.smithay]
 git = "https://github.com/smithay/Smithay"
-rev = "0c109544b1"
+rev = "49e423ec05"
 default-features = false
-features = [ "backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "renderer_gl", "use_system_lib", "desktop", "wayland_frontend" ]
+features = [ "backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "renderer_gl", "use_system_lib", "desktop", "wayland_frontend", "xwayland" ]
 
 [build-dependencies]
 gst-plugin-version-helper = "0.7.5"
