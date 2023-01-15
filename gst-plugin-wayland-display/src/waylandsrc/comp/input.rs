@@ -1,4 +1,4 @@
-use super::State;
+use super::{focus::FocusTarget, State};
 use smithay::{
     backend::{
         input::{
@@ -7,7 +7,6 @@ use smithay::{
         },
         libinput::LibinputInputBackend,
     },
-    desktop::WindowSurfaceType,
     input::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
@@ -18,7 +17,6 @@ use smithay::{
         wayland_server::protocol::wl_pointer,
     },
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
-    wayland::seat::WaylandFocus,
 };
 use std::{os::unix::io::RawFd, path::Path};
 
@@ -72,13 +70,7 @@ impl State {
                 let under = self.space.element_under(self.pointer_location);
                 pointer.motion(
                     self,
-                    under.and_then(|(w, pos)| {
-                        w.surface_under(
-                            self.pointer_location - pos.to_f64(),
-                            WindowSurfaceType::ALL,
-                        )
-                        .map(|(surface, surface_pos)| (surface, surface_pos + pos))
-                    }),
+                    under.map(|(w, pos)| (w.clone().into(), pos)),
                     &MotionEvent {
                         location: self.pointer_location,
                         serial,
@@ -170,7 +162,7 @@ impl State {
                 .map(|(w, p)| (w.clone(), p))
             {
                 self.space.raise_element(&window, true);
-                keyboard.set_focus(self, window.wl_surface(), serial);
+                keyboard.set_focus(self, Some(FocusTarget::from(window)), serial);
                 return;
             }
         }

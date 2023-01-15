@@ -67,9 +67,11 @@ use smithay::{
     },
 };
 
+mod focus;
 mod input;
 mod window;
 
+use self::focus::*;
 use self::input::*;
 use self::window::*;
 
@@ -251,8 +253,8 @@ impl DmabufHandler for State {
 }
 
 impl SeatHandler for State {
-    type KeyboardFocus = WlSurface;
-    type PointerFocus = WlSurface;
+    type KeyboardFocus = FocusTarget;
+    type PointerFocus = FocusTarget;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seat_state
@@ -260,7 +262,11 @@ impl SeatHandler for State {
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focus: Option<&Self::KeyboardFocus>) {
         if let Some(surface) = focus {
-            let client = surface.client();
+            let client = match surface {
+                FocusTarget::Wayland(w) => w.toplevel().wl_surface().client(),
+                FocusTarget::Popup(p) => p.wl_surface().client(),
+                FocusTarget::X11(s) => s.wl_surface().and_then(|s| s.client()),
+            };
             set_data_device_focus(&self.dh, seat, client);
         } else {
             set_data_device_focus(&self.dh, seat, None);
@@ -301,7 +307,13 @@ impl XdgShellHandler for State {
     fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
         let seat: Seat<State> = Seat::from_resource(&seat).unwrap();
         let kind = PopupKind::Xdg(surface.clone());
-        if let Some(root) = find_popup_root_surface(&kind).ok() {
+        if let Some(root) = find_popup_root_surface(&kind).ok().and_then(|root| {
+            self.space
+                .elements()
+                .find(|w| w.wl_surface().map(|s| s == root).unwrap_or(false))
+                .cloned()
+                .map(FocusTarget::from)
+        }) {
             let ret = self.popups.grab_popup(root, surface.into(), &seat, serial);
             if let Ok(mut grab) = ret {
                 if let Some(keyboard) = seat.get_keyboard() {
