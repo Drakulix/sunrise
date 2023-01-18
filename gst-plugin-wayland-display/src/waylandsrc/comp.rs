@@ -921,4 +921,6 @@ pub fn init(
         data.state.space.refresh();
         data.state.popups.cleanup();
     }
+
+    std::mem::drop(_egl_guard);
 }

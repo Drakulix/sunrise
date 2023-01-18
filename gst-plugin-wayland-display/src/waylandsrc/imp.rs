@@ -192,6 +192,7 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                 gst::warning!(CAT, "Failed to send stop command: {}", err);
                 return Ok(());
             };
+            mem::drop(state.command_tx);
             if state.thread_handle.join().is_err() {
                 gst::warning!(CAT, "Failed to join compositor thread");
             };
