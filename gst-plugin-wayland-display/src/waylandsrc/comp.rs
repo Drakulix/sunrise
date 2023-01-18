@@ -1,6 +1,5 @@
 use std::{
     os::unix::prelude::{AsRawFd, OwnedFd},
-    path::PathBuf,
     sync::mpsc::SyncSender,
 };
 
@@ -536,8 +535,8 @@ impl XwmHandler for Data {
         &mut self,
         _: XwmId,
         window: X11Surface,
-        x: Option<i32>,
-        y: Option<i32>,
+        _x: Option<i32>,
+        _y: Option<i32>,
         w: Option<u32>,
         h: Option<u32>,
     ) {
@@ -630,7 +629,7 @@ impl XwmHandler for Data {
 pub fn init(
     buffer_tx: SyncSender<gst::Buffer>,
     command_src: Channel<Command>,
-    node: impl Into<PathBuf>,
+    drm_node: DrmNode,
     seat: impl AsRef<str>,
     info: gst_video::VideoInfo,
 ) {
@@ -639,7 +638,6 @@ pub fn init(
     let mut display = Display::<State>::new().unwrap();
     let dh = display.handle();
 
-    let node = node.into();
     let size: Size<i32, Physical> = (info.width() as i32, info.height() as i32).into();
     let framerate = info.fps().numer();
 
@@ -653,12 +651,11 @@ pub fn init(
     let viewporter_state = ViewporterState::new::<State, _>(&dh, log.clone());
 
     // init render backend
-    let drm_node = DrmNode::from_path(&node).expect("Invalid render node path");
     let drm_file = std::fs::File::open(
         drm_node
             .dev_path_with_type(NodeType::Render)
             .or_else(|| drm_node.dev_path())
-            .unwrap_or_else(|| node),
+            .expect("Failed to determine drm-node path"),
     )
     .expect("Failed to open drm device");
 
@@ -866,7 +863,7 @@ pub fn init(
     let mut data = Data { display, state };
     while !data.state.should_quit {
         event_loop
-            .dispatch(std::time::Duration::ZERO, &mut data)
+            .dispatch(std::time::Duration::from_millis(16), &mut data)
             .expect("Failed to dispatch event loop");
         let next_buffer = data.state.create_frame().expect("Failed to render buffer");
         for window in data.state.space.elements() {

@@ -1,6 +1,7 @@
 use std::sync::{mpsc::Receiver, Mutex};
 use std::thread::JoinHandle;
 
+use smithay::backend::drm::DrmNode;
 use smithay::reexports::calloop::channel::Sender;
 
 use gst::glib;
@@ -59,14 +60,22 @@ impl slog::Drain for SlogGstDrain {
 
 pub struct WaylandDisplaySrc {
     state: Mutex<Option<State>>,
+    settings: Mutex<Settings>,
 }
 
 impl Default for WaylandDisplaySrc {
     fn default() -> Self {
         WaylandDisplaySrc {
             state: Mutex::new(None),
+            settings: Mutex::new(Settings::default()),
         }
     }
+}
+
+#[derive(Debug, Default)]
+pub struct Settings {
+    render_node: Option<DrmNode>,
+    input_seat: Option<String>,
 }
 
 pub struct State {
@@ -89,13 +98,63 @@ impl ObjectSubclass for WaylandDisplaySrc {
 
 impl ObjectImpl for WaylandDisplaySrc {
     fn properties() -> &'static [glib::ParamSpec] {
-        &[]
+        static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| {
+            vec![
+                glib::ParamSpecString::builder("render_node")
+                    .nick("DRM Render Node")
+                    .blurb("DRM Render Node to use (e.g. /dev/dri/renderD128")
+                    .construct()
+                    .build(),
+                glib::ParamSpecString::builder("seat")
+                    .nick("libinput seat")
+                    .blurb("libinput seat to use (e.g. seat-0")
+                    .construct()
+                    .build(),
+            ]
+        });
+
+        PROPERTIES.as_ref()
     }
 
-    fn set_property(&self, _id: usize, _value: &glib::Value, _pspec: &glib::ParamSpec) {}
+    fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+        match pspec.name() {
+            "render_node" => {
+                let mut settings = self.settings.lock().unwrap();
+                let node = value
+                    .get::<Option<String>>()
+                    .expect("type checked upstream")
+                    .map(|path| DrmNode::from_path(path).expect("No valid render_node"));
+                settings.render_node = node;
+            }
+            "seat" => {
+                let mut settings = self.settings.lock().unwrap();
+                let seat = value
+                    .get::<Option<String>>()
+                    .expect("type checked upstream");
+                settings.input_seat = seat;
+            }
+            _ => unreachable!(),
+        }
+    }
 
-    fn property(&self, _id: usize, _pspec: &glib::ParamSpec) -> glib::Value {
-        todo!()
+    fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+        match pspec.name() {
+            "render_node" => {
+                let settings = self.settings.lock().unwrap();
+                settings
+                    .render_node
+                    .as_ref()
+                    .and_then(|node| node.dev_path())
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| String::from("/dev/dri/renderD128"))
+                    .to_value()
+            }
+            "seat" => {
+                let settings = self.settings.lock().unwrap();
+                settings.input_seat.to_value()
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn constructed(&self) {
@@ -169,6 +228,16 @@ impl BaseSrcImpl for WaylandDisplaySrc {
             return Ok(());
         }
 
+        let settings = self.settings.lock().unwrap();
+        let render_node = settings.render_node.clone().unwrap_or_else(|| {
+            DrmNode::from_path("/dev/dri/renderD128")
+                .expect("Failed to open default DRM render node")
+        });
+        let input_seat = settings
+            .input_seat
+            .clone()
+            .unwrap_or_else(|| String::from("seat-0"));
+
         let (buffer_tx, buffer_rx) = std::sync::mpsc::sync_channel(1);
         let (command_tx, command_src) = smithay::reexports::calloop::channel::channel();
         let thread_handle = std::thread::spawn(move || {
@@ -176,8 +245,8 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                 buffer_tx,
                 command_src,
                 //TODO: Make all of this configurable
-                String::from("/dev/dri/renderD128"),
-                "seat-0",
+                render_node,
+                &input_seat,
                 VIDEO_INFO.clone(),
             )
         });
@@ -197,7 +266,7 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                 gst::warning!(CAT, "Failed to send stop command: {}", err);
                 return Ok(());
             };
-            mem::drop(state.command_tx);
+            std::mem::drop(state.command_tx);
             if state.thread_handle.join().is_err() {
                 gst::warning!(CAT, "Failed to join compositor thread");
             };
