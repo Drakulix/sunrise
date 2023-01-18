@@ -162,6 +162,9 @@ impl State {
                 .map(|(w, p)| (w.clone(), p))
             {
                 self.space.raise_element(&window, true);
+                if let super::window::Window::X11(ref surface) = window {
+                    let _ = self.xwm.as_mut().unwrap().raise_window(surface);
+                }
                 keyboard.set_focus(self, Some(FocusTarget::from(window)), serial);
                 return;
             }

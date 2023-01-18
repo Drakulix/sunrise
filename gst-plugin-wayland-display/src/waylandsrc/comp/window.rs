@@ -27,6 +27,12 @@ impl From<ToplevelSurface> for Window {
     }
 }
 
+impl From<X11Surface> for Window {
+    fn from(s: X11Surface) -> Self {
+        Window::X11(s)
+    }
+}
+
 impl WaylandFocus for Window {
     fn wl_surface(&self) -> Option<WlSurface> {
         match self {

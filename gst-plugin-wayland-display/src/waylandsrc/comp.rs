@@ -36,7 +36,7 @@ use smithay::{
         calloop::{
             channel::{Channel, Event},
             generic::Generic,
-            EventLoop, Interest, Mode, PostAction,
+            EventLoop, Interest, LoopHandle, Mode, PostAction,
         },
         input::Libinput,
         wayland_protocols::xdg::shell::server::xdg_toplevel::State as XdgState,
@@ -65,6 +65,10 @@ use smithay::{
         socket::ListeningSocketSource,
         viewporter::ViewporterState,
     },
+    xwayland::{
+        xwm::{WmWindowType, XwmId},
+        X11Surface, XWayland, XWaylandEvent, XwmHandler, X11WM,
+    },
 };
 
 mod focus;
@@ -74,6 +78,8 @@ mod window;
 use self::focus::*;
 use self::input::*;
 use self::window::*;
+
+const CURSOR_DATA_BYTES: &[u8] = include_bytes!("./comp/cursor.rgba");
 
 struct ClientState;
 impl ClientData for ClientState {
@@ -88,6 +94,7 @@ struct Data {
 
 #[allow(dead_code)]
 struct State {
+    handle: LoopHandle<'static, Data>,
     should_quit: bool,
     start_time: std::time::Instant,
     log: slog::Logger,
@@ -119,6 +126,7 @@ struct State {
     shell_state: XdgShellState,
     shm_state: ShmState,
     viewporter_state: ViewporterState,
+    xwm: Option<X11WM>,
 }
 
 impl BufferHandler for State {
@@ -131,6 +139,7 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        X11WM::commit_hook(surface);
         on_commit_buffer_handler(surface);
         if let Err(err) = import_surface_tree(&mut self.renderer, surface, &self.log) {
             slog::warn!(self.log, "Failed to load client buffer: {}", err);
@@ -430,6 +439,194 @@ impl State {
     }
 }
 
+impl XwmHandler for Data {
+    fn xwm_state(&mut self, _: XwmId) -> &mut X11WM {
+        self.state.xwm.as_mut().unwrap()
+    }
+
+    fn new_window(&mut self, _: XwmId, _window: X11Surface) {}
+    fn new_override_redirect_window(&mut self, _: XwmId, _window: X11Surface) {}
+
+    fn map_window_request(&mut self, id: XwmId, window: X11Surface) {
+        if !matches!(
+            window.window_type(),
+            None | Some(WmWindowType::Normal)
+                | Some(WmWindowType::Utility)
+                | Some(WmWindowType::Splash)
+        ) {
+            let geo = window.geometry();
+            let _ = window.set_mapped(true);
+            let _ = window.set_activated(true);
+            let _ = window.configure(geo);
+            let _ = self.xwm_state(id).raise_window(&window);
+            self.state
+                .space
+                .map_element(Window::from(window), geo.loc, true);
+            return;
+        }
+
+        let output_geo = Rectangle::from_loc_and_size(
+            (0, 0),
+            self.state
+                .output
+                .current_mode()
+                .unwrap()
+                .size
+                .to_f64()
+                .to_logical(self.state.output.current_scale().fractional_scale())
+                .to_i32_round(),
+        );
+
+        let window_size = if window.window_type() == Some(WmWindowType::Splash) {
+            // don't resize splashes
+            window.geometry().size
+        } else {
+            // if max_size doesn't prohibit it, give it the full output by default
+            window
+                .max_size()
+                .map(|size| Rectangle::from_loc_and_size((0, 0), size))
+                .unwrap_or(output_geo)
+                .intersection(output_geo)
+                .unwrap()
+                .size
+        };
+        // center it
+        let window_loc = (
+            (output_geo.size.w / 2) - (window_size.w / 2),
+            (output_geo.size.h / 2) - (window_size.h / 2),
+        );
+
+        let _ = window.set_mapped(true);
+        if window.window_type() != Some(WmWindowType::Splash) {
+            let _ = window.set_fullscreen(true);
+        }
+        let _ = window.set_activated(true);
+        let _ = window.configure(Rectangle::from_loc_and_size(window_loc, window_size));
+        let _ = self.xwm_state(id).raise_window(&window);
+        self.state
+            .space
+            .map_element(Window::X11(window), window_loc, true);
+    }
+
+    fn mapped_override_redirect_window(&mut self, _: XwmId, window: X11Surface) {
+        let geo = window.geometry();
+        self.state
+            .space
+            .map_element(Window::from(window), geo.loc, true);
+    }
+
+    fn unmapped_window(&mut self, _: XwmId, window: X11Surface) {
+        let maybe = self
+            .state
+            .space
+            .elements()
+            .find(|e| matches!(e, Window::X11(w) if w == &window))
+            .cloned();
+        if let Some(elem) = maybe {
+            self.state.space.unmap_elem(&elem)
+        }
+        if !window.is_override_redirect() {
+            window.set_mapped(false).unwrap();
+        }
+    }
+
+    fn destroyed_window(&mut self, _: XwmId, _window: X11Surface) {}
+
+    fn configure_request(
+        &mut self,
+        _: XwmId,
+        window: X11Surface,
+        x: Option<i32>,
+        y: Option<i32>,
+        w: Option<u32>,
+        h: Option<u32>,
+    ) {
+        let mut geo = window.geometry();
+        /*
+        if let Some(x) = x {
+            geo.loc.x = x;
+        }
+        if let Some(y) = y {
+            geo.loc.y = y;
+        }
+        */
+        if let Some(w) = w {
+            geo.size.w = w as i32;
+        }
+        if let Some(h) = h {
+            geo.size.h = h as i32;
+        }
+        let _ = window.configure(geo);
+
+        /*
+        let Some(elem) = self
+            .state
+            .space
+            .elements()
+            .find(|e| matches!(e, Window::X11(w) if w == &window))
+            .cloned()
+        else { return };
+        self.state.space.map_element(elem, geo.loc, false);
+        */
+    }
+
+    fn configure_notify(&mut self, _: XwmId, window: X11Surface, x: i32, y: i32, _w: u32, _h: u32) {
+        if window.is_override_redirect() {
+            let Some(elem) = self
+                .state
+                .space
+                .elements()
+                .find(|e| matches!(e, Window::X11(w) if w == &window))
+                .cloned()
+            else { return };
+            self.state.space.map_element(elem, (x, y), false);
+        }
+    }
+
+    fn resize_request(
+        &mut self,
+        _: XwmId,
+        _window: X11Surface,
+        _button: u32,
+        _resize_edge: smithay::xwayland::xwm::ResizeEdge,
+    ) {
+    }
+    fn move_request(&mut self, _: XwmId, _window: X11Surface, _button: u32) {}
+
+    fn fullscreen_request(&mut self, id: XwmId, window: X11Surface) {
+        let maybe = self
+            .state
+            .space
+            .elements()
+            .find(|e| matches!(e, Window::X11(w) if w == &window))
+            .cloned();
+        if let Some(elem) = maybe {
+            let _ = window.set_fullscreen(true);
+
+            let output_geo = Rectangle::from_loc_and_size(
+                (0, 0),
+                self.state
+                    .output
+                    .current_mode()
+                    .unwrap()
+                    .size
+                    .to_f64()
+                    .to_logical(self.state.output.current_scale().fractional_scale())
+                    .to_i32_round(),
+            );
+            let window_geo = window.geometry();
+            if window_geo != output_geo {
+                let _ = window.configure(output_geo);
+                let _ = self.xwm_state(id).raise_window(&window);
+                self.state.space.map_element(elem, (0, 0), true);
+            }
+        }
+    }
+    fn unfullscreen_request(&mut self, _: XwmId, window: X11Surface) {
+        let _ = window.set_fullscreen(false);
+    }
+}
+
 pub fn init(
     buffer_tx: SyncSender<gst::Buffer>,
     command_src: Channel<Command>,
@@ -500,13 +697,8 @@ pub fn init(
     // dma buffer
     let dmabuf_global = dmabuf_state.create_global::<State, _>(&dh, formats.clone(), log.clone());
 
-    let cursor_element = MemoryRenderBuffer::from_memory(
-        include_bytes!("./comp/cursor.rgba"),
-        (64, 64),
-        1,
-        Transform::Normal,
-        None,
-    );
+    let cursor_element =
+        MemoryRenderBuffer::from_memory(CURSOR_DATA_BYTES, (64, 64), 1, Transform::Normal, None);
 
     // init input backend
     let mut libinput_context = Libinput::new_with_udev(NixInterface::new(log.clone()));
@@ -542,7 +734,9 @@ pub fn init(
         .expect("Failed to add keyboard to seat");
     seat.add_pointer();
 
+    let mut event_loop = EventLoop::<Data>::try_new().expect("Unable to create event_loop");
     let state = State {
+        handle: event_loop.handle(),
         should_quit: false,
         start_time: std::time::Instant::now(),
         log: log.clone(),
@@ -571,10 +765,10 @@ pub fn init(
         shell_state,
         shm_state,
         viewporter_state,
+        xwm: None,
     };
 
     // init event loop
-    let mut event_loop = EventLoop::<Data>::try_new().expect("Unable to create event_loop");
     event_loop
         .handle()
         .insert_source(libinput_backend, move |event, _, data| {
@@ -625,6 +819,49 @@ pub fn init(
             },
         )
         .expect("Failed to init wayland server source");
+
+    // startup xwayland
+    let _xwayland = {
+        let (xwayland, channel) = XWayland::new(log.clone(), &dh);
+        let log2 = log.clone();
+        let ret = event_loop
+            .handle()
+            .insert_source(channel, move |event, _, data| match event {
+                XWaylandEvent::Ready {
+                    connection,
+                    client,
+                    client_fd: _,
+                    display,
+                } => {
+                    let mut wm = X11WM::start_wm(
+                        data.state.handle.clone(),
+                        dh.clone(),
+                        connection,
+                        client,
+                        log2.clone(),
+                    )
+                    .expect("Failed to attach X11 Window Manager");
+                    wm.set_cursor(CURSOR_DATA_BYTES, Size::from((64, 64)), Point::from((0, 0)))
+                        .expect("Failed to set xwayland default cursor");
+                    data.state.xwm = Some(wm);
+                    slog::info!(log2, "Started Xwayland on display :{}", display);
+                }
+                XWaylandEvent::Exited => {
+                    let _ = data.state.xwm.take();
+                }
+            });
+        if let Err(e) = ret {
+            slog::error!(
+                log,
+                "Failed to insert the XWaylandSource into the event loop: {}",
+                e
+            );
+        }
+        xwayland
+            .start(event_loop.handle())
+            .expect("Failed to start Xwayland");
+        xwayland
+    };
 
     let mut data = Data { display, state };
     while !data.state.should_quit {
