@@ -10,6 +10,7 @@ use gst::subclass::prelude::*;
 
 use gst_base::subclass::base_src::CreateSuccess;
 use gst_base::subclass::prelude::*;
+use gst_base::traits::BaseSrcExt;
 
 static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
     gst::DebugCategory::new(
@@ -102,6 +103,10 @@ impl ObjectImpl for WaylandDisplaySrc {
 
         let obj = self.obj();
         obj.set_element_flags(gst::ElementFlags::SOURCE);
+        obj.set_live(true);
+        obj.set_format(gst::Format::Time);
+        obj.set_automatic_eos(false);
+        obj.set_do_timestamp(true);
     }
 }
 
