@@ -17,12 +17,12 @@ capi = []
 doc = []
 
 [dependencies]
-gst = { version = "0.20", package = "gstreamer", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators", features = ["v1_18"] }
-gst-allocators = {version = "0.20", package = "gstreamer-allocators", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
-gst-base = {version = "0.20", package = "gstreamer-base", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
-gst-base-sys = {version = "0.20", package = "gstreamer-base-sys", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
-gst-sys = {version = "0.20", package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
-gst-video = { version = "0.20", package = "gstreamer-video", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators", features = ["v1_18"] }
+gst = { version = "0.20", package = "gstreamer", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e", features = ["v1_18"] }
+gst-allocators = {version = "0.20", package = "gstreamer-allocators", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e"}
+gst-base = {version = "0.20", package = "gstreamer-base", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e"}
+gst-base-sys = {version = "0.20", package = "gstreamer-base-sys", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e"}
+gst-sys = {version = "0.20", package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e"}
+gst-video = { version = "0.20", package = "gstreamer-video", git = "https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git", rev = "77866a52df8833ae77a1823a178852e9b105e78e", features = ["v1_18"] }
 slog = "2.7.0"
 once_cell = "1.17.0"
 memfd = "0.6.2"

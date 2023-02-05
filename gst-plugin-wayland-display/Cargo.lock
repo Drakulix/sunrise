@@ -546,7 +546,7 @@ dependencies = [
 [[package]]
 name = "gstreamer"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -570,7 +570,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-allocators"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "bitflags",
  "glib",
@@ -583,7 +583,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-allocators-sys"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "glib-sys",
  "gobject-sys",
@@ -595,7 +595,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-base"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "atomic_refcell",
  "bitflags",
@@ -609,7 +609,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-base-sys"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "glib-sys",
  "gobject-sys",
@@ -621,7 +621,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-sys"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "glib-sys",
  "gobject-sys",
@@ -632,7 +632,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-video"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -648,7 +648,7 @@ dependencies = [
 [[package]]
 name = "gstreamer-video-sys"
 version = "0.20.0"
-source = "git+https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git?branch=allow_subclass_fd_allocators#4b24591699fb4727d60d4ae585530315acf7132b"
+source = "git+https://gitlab.freedesktop.org/gstreamer/gstreamer-rs.git?rev=77866a52df8833ae77a1823a178852e9b105e78e#77866a52df8833ae77a1823a178852e9b105e78e"
 dependencies = [
  "glib-sys",
  "gobject-sys",
