@@ -14,7 +14,12 @@
                 "GST_DEBUG": "2,waylanddisplaysrc=7"
             },
             "program": "/usr/bin/gst-launch-1.0",
-            "args": ["-v", "waylanddisplaysrc", "!", "videoconvert", "!", "x264enc", "tune=zerolatency", "speed-preset=superfast", "!", "autovideosink"],
+            "args": [
+                "-v",
+                "waylanddisplaysrc",
+                "!",
+                "waylandsink"
+            ],
             "cwd": "${workspaceFolder}"
         }
     ]

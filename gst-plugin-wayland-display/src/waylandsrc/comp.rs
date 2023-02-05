@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
+    ffi::OsString,
     os::unix::prelude::{AsRawFd, OwnedFd},
-    sync::mpsc::SyncSender,
+    time::Duration,
 };
 
 use super::imp::Command;
@@ -8,9 +10,8 @@ use slog::Drain;
 use smithay::{
     backend::{
         allocator::{
-            dmabuf::{AsDmabuf, Dmabuf},
+            dmabuf::{Dmabuf, WeakDmabuf},
             gbm::GbmDevice,
-            Fourcc, Swapchain,
         },
         drm::{DrmDeviceFd, DrmNode, NodeType},
         egl::{EGLContext, EGLDisplay},
@@ -20,7 +21,7 @@ use smithay::{
             element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
             gles2::Gles2Renderer,
             utils::{import_surface_tree, on_commit_buffer_handler},
-            Bind, ExportMem, ImportDma, ImportMemWl, Unbind,
+            Bind, ImportDma, ImportMemWl, Unbind,
         },
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
@@ -65,8 +66,8 @@ use smithay::{
         viewporter::ViewporterState,
     },
     xwayland::{
-        xwm::{WmWindowType, XwmId},
-        X11Surface, XWayland, XWaylandEvent, XwmHandler, X11WM,
+        xwm::{Reorder, WmWindowType, XwmId},
+        X11Surface, X11Wm, XWayland, XWaylandEvent, XwmHandler,
     },
 };
 
@@ -100,14 +101,13 @@ struct State {
 
     // render
     egl: EGLDisplay,
-    dtr: DamageTrackedRenderer,
+    dtr: Option<DamageTrackedRenderer>,
     renderer: Gles2Renderer,
     dmabuf_global: DmabufGlobal,
-    swapchain: Swapchain<GbmDevice<DrmDeviceFd>>,
-    direct_scanout: bool,
+    buffers_known: HashMap<WeakDmabuf, u8>,
 
     // management
-    output: Output,
+    output: Option<Output>,
     seat: Seat<Self>,
     space: Space<Window>,
     popups: PopupManager,
@@ -125,7 +125,7 @@ struct State {
     shell_state: XdgShellState,
     shm_state: ShmState,
     viewporter_state: ViewporterState,
-    xwm: Option<X11WM>,
+    xwm: Option<X11Wm>,
 }
 
 impl BufferHandler for State {
@@ -138,8 +138,9 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
-        X11WM::commit_hook(surface);
+        X11Wm::commit_hook::<Data>(surface);
         on_commit_buffer_handler(surface);
+
         if let Err(err) = import_surface_tree(&mut self.renderer, surface, &self.log) {
             slog::warn!(self.log, "Failed to load client buffer: {}", err);
         }
@@ -173,16 +174,29 @@ impl CompositorHandler for State {
                     attributes_guard.max_size,
                 )
             });
+
+            if self.output.is_none() {
+                return;
+            }
+
             if !initial_configure_sent {
                 if max_size.w == 0 && max_size.h == 0 {
                     toplevel.with_pending_state(|state| {
                         state.size = Some(
                             self.output
+                                .as_ref()
+                                .unwrap()
                                 .current_mode()
                                 .unwrap()
                                 .size
                                 .to_f64()
-                                .to_logical(self.output.current_scale().fractional_scale())
+                                .to_logical(
+                                    self.output
+                                        .as_ref()
+                                        .unwrap()
+                                        .current_scale()
+                                        .fractional_scale(),
+                                )
                                 .to_i32_round(),
                         );
                         state.states.set(XdgState::Fullscreen);
@@ -197,11 +211,19 @@ impl CompositorHandler for State {
                 let window_size = toplevel.current_state().size.unwrap_or((0, 0).into());
                 let output_size: Size<i32, _> = self
                     .output
+                    .as_ref()
+                    .unwrap()
                     .current_mode()
                     .unwrap()
                     .size
                     .to_f64()
-                    .to_logical(self.output.current_scale().fractional_scale())
+                    .to_logical(
+                        self.output
+                            .as_ref()
+                            .unwrap()
+                            .current_scale()
+                            .fractional_scale(),
+                    )
                     .to_i32_round();
                 let loc = (
                     (output_size.w / 2) - (window_size.w / 2),
@@ -361,36 +383,13 @@ delegate_xdg_shell!(State);
 delegate_viewporter!(State);
 
 impl State {
-    fn create_frame(&mut self) -> Result<Dmabuf, DTRError<Gles2Renderer>> {
-        /*
-        if let Some(window) = self.space.windows().next() {
-            let SurfaceKind::Xdg(xdg) = window.toplevel();
-            let surface = xdg.wl_surface();
-            if get_children(surface).is_empty() && self.popups.find_popup(surface).is_none() {
-                let output_size: Size<i32, _> = self.output.current_mode().unwrap().size
-                    .to_f64()
-                    .to_logical(self.output.current_scale().fractional_scale())
-                    .to_i32_round();
-                if let Some(dmabuf) = with_renderer_surface_state(xdg.wl_surface(), |state| {
-                    if state.surface_size().map(|size| size == output_size).unwrap_or(false) {
-                        state.wl_buffer().and_then(|buf| get_dmabuf(buf).ok())
-                    } else {
-                        None
-                    }
-                }) {
-                    if !self.direct_scanout {
-                        self.swapchain.reset_buffers();
-                        self.direct_scanout = true;
-                    };
-                    return Ok(Capture {
-                        dmabuf,
-                        presentation_time: std::time::Instant::now(),
-                    });
-                }
-            }
+    fn create_frame(&mut self, dmabuf: Dmabuf) -> Result<(), DTRError<Gles2Renderer>> {
+        if self.output.is_none() || self.dtr.is_none() {
+            return Ok(());
         }
-        self.direct_scanout = false;
-        */
+
+        let weak_buffer = dmabuf.weak();
+        let age = self.buffers_known.remove(&weak_buffer).unwrap_or(0);
 
         let elements = vec![MemoryRenderBufferRenderElement::from_buffer(
             &mut self.renderer,
@@ -403,43 +402,36 @@ impl State {
         )
         .map_err(DTRError::Rendering)?];
 
-        let offscreen = self
-            .swapchain
-            .acquire()
-            .unwrap()
-            .expect("Failed to acquire buffer");
-        let age = offscreen.age();
-
-        let mut dmabuf = offscreen.userdata().get::<Dmabuf>().cloned();
-        if dmabuf.is_none() {
-            let new_dmabuf = offscreen.export().unwrap();
-            offscreen
-                .userdata()
-                .insert_if_missing(|| new_dmabuf.clone());
-            dmabuf = Some(new_dmabuf);
-        }
-
-        let dmabuf = dmabuf.unwrap();
         self.renderer
             .bind(dmabuf.clone())
             .map_err(DTRError::Rendering)?;
         render_output(
-            &self.output,
+            self.output.as_ref().unwrap(),
             &mut self.renderer,
             age as usize,
             [&self.space],
             &*elements,
-            &mut self.dtr,
+            self.dtr.as_mut().unwrap(),
             [0.0, 0.0, 0.0, 1.0],
             self.log.clone(),
         )?;
         self.renderer.unbind().map_err(DTRError::Rendering)?;
-        Ok(dmabuf)
+
+        self.buffers_known
+            .retain(|buffer, _age| buffer.upgrade().is_some());
+        for age in self.buffers_known.values_mut() {
+            match age.checked_add(1) {
+                Some(new) => *age = new,
+                None => *age = 0,
+            }
+        }
+        self.buffers_known.insert(weak_buffer, 1);
+        Ok(())
     }
 }
 
 impl XwmHandler for Data {
-    fn xwm_state(&mut self, _: XwmId) -> &mut X11WM {
+    fn xwm_state(&mut self, _: XwmId) -> &mut X11Wm {
         self.state.xwm.as_mut().unwrap()
     }
 
@@ -464,17 +456,20 @@ impl XwmHandler for Data {
             return;
         }
 
-        let output_geo = Rectangle::from_loc_and_size(
-            (0, 0),
-            self.state
-                .output
-                .current_mode()
-                .unwrap()
-                .size
-                .to_f64()
-                .to_logical(self.state.output.current_scale().fractional_scale())
-                .to_i32_round(),
-        );
+        let output_geo = if let Some(output) = self.state.output.as_ref() {
+            Rectangle::from_loc_and_size(
+                (0, 0),
+                output
+                    .current_mode()
+                    .unwrap()
+                    .size
+                    .to_f64()
+                    .to_logical(output.current_scale().fractional_scale())
+                    .to_i32_round(),
+            )
+        } else {
+            Rectangle::from_loc_and_size((0, 0), (800, 600))
+        };
 
         let window_size = if window.window_type() == Some(WmWindowType::Splash) {
             // don't resize splashes
@@ -539,6 +534,7 @@ impl XwmHandler for Data {
         _y: Option<i32>,
         w: Option<u32>,
         h: Option<u32>,
+        _reorder: Option<Reorder>,
     ) {
         let mut geo = window.geometry();
         /*
@@ -569,7 +565,13 @@ impl XwmHandler for Data {
         */
     }
 
-    fn configure_notify(&mut self, _: XwmId, window: X11Surface, x: i32, y: i32, _w: u32, _h: u32) {
+    fn configure_notify(
+        &mut self,
+        _: XwmId,
+        window: X11Surface,
+        geometry: Rectangle<i32, Logical>,
+        _above: Option<u32>,
+    ) {
         if window.is_override_redirect() {
             let Some(elem) = self
                 .state
@@ -578,7 +580,7 @@ impl XwmHandler for Data {
                 .find(|e| matches!(e, Window::X11(w) if w == &window))
                 .cloned()
             else { return };
-            self.state.space.map_element(elem, (x, y), false);
+            self.state.space.map_element(elem, geometry.loc, false);
         }
     }
 
@@ -593,6 +595,10 @@ impl XwmHandler for Data {
     fn move_request(&mut self, _: XwmId, _window: X11Surface, _button: u32) {}
 
     fn fullscreen_request(&mut self, id: XwmId, window: X11Surface) {
+        if self.state.output.is_none() {
+            return;
+        }
+
         let maybe = self
             .state
             .space
@@ -606,11 +612,20 @@ impl XwmHandler for Data {
                 (0, 0),
                 self.state
                     .output
+                    .as_ref()
+                    .unwrap()
                     .current_mode()
                     .unwrap()
                     .size
                     .to_f64()
-                    .to_logical(self.state.output.current_scale().fractional_scale())
+                    .to_logical(
+                        self.state
+                            .output
+                            .as_ref()
+                            .unwrap()
+                            .current_scale()
+                            .fractional_scale(),
+                    )
                     .to_i32_round(),
             );
             let window_geo = window.geometry();
@@ -626,20 +641,11 @@ impl XwmHandler for Data {
     }
 }
 
-pub fn init(
-    buffer_tx: SyncSender<gst::Buffer>,
-    command_src: Channel<Command>,
-    drm_node: DrmNode,
-    seat: impl AsRef<str>,
-    info: gst_video::VideoInfo,
-) {
+pub fn init(command_src: Channel<Command>, drm_node: DrmNode, seat: impl AsRef<str>) {
     let log = ::slog::Logger::root(super::imp::SlogGstDrain.fuse(), slog::o!());
 
     let mut display = Display::<State>::new().unwrap();
     let dh = display.handle();
-
-    let size: Size<i32, Physical> = (info.width() as i32, info.height() as i32).into();
-    let framerate = info.fps().numer();
 
     // init state
     let compositor_state = CompositorState::new::<State, _>(&dh, log.clone());
@@ -667,19 +673,6 @@ pub fn init(
         EGLDisplay::new(gbm_device.clone(), log.clone()).expect("Failed to create EGLDisplay");
     let context = EGLContext::new(&egl, log.clone()).expect("Failed to create EGLContext");
 
-    let modifiers = context
-        .dmabuf_texture_formats()
-        .into_iter()
-        .filter(|x| x.code == Fourcc::Xrgb8888)
-        .map(|x| x.modifier)
-        .collect();
-    let swapchain = Swapchain::new(
-        gbm_device,
-        size.w as u32,
-        size.h as u32,
-        Fourcc::Xrgb8888,
-        modifiers,
-    );
     let renderer =
         unsafe { Gles2Renderer::new(context, log.clone()) }.expect("Failed to initialize renderer");
     let formats = Bind::<Dmabuf>::supported_formats(&renderer)
@@ -704,27 +697,7 @@ pub fn init(
         .expect("Failed to assign libinput seat");
     let libinput_backend = LibinputInputBackend::new(libinput_context, log.clone());
 
-    // init wayland objects
-    let output = Output::new(
-        "HEADLESS-1".into(),
-        PhysicalProperties {
-            make: "Virtual".into(),
-            model: "Sunrise".into(),
-            size: (0, 0).into(),
-            subpixel: Subpixel::Unknown,
-        },
-        log.clone(),
-    );
-    let mode = OutputMode {
-        size: size.into(),
-        refresh: (framerate * 1000) as i32,
-    };
-    output.change_current_state(Some(mode), None, None, None);
-    output.set_preferred(mode);
-    let dtr = DamageTrackedRenderer::from_output(&output);
-
-    let mut space = Space::new(log.clone());
-    space.map_output(&output, (0, 0));
+    let space = Space::new(log.clone());
 
     let mut seat = seat_state.new_wl_seat(&dh, "seat-0", log.clone());
     seat.add_keyboard(XkbConfig::default(), 200, 25)
@@ -740,16 +713,15 @@ pub fn init(
 
         egl,
         renderer,
-        dtr,
+        dtr: None,
         dmabuf_global,
-        swapchain,
-        direct_scanout: false,
+        buffers_known: HashMap::new(),
 
         space,
         popups: PopupManager::new(log.clone()),
-        output,
         seat,
-        pointer_location: (size.w as f64 / 2.0, size.h as f64 / 2.0).into(),
+        output: None,
+        pointer_location: (0., 0.).into(),
         cursor_element,
         pending_windows: Vec::new(),
 
@@ -772,10 +744,50 @@ pub fn init(
             data.state.process_input_event(event)
         })
         .unwrap();
+
+    let log_clone = log.clone();
     event_loop
         .handle()
         .insert_source(command_src, move |event, _, data| {
             match event {
+                Event::Msg(Command::VideoInfo(info)) => {
+                    let size: Size<i32, Physical> =
+                        (info.width() as i32, info.height() as i32).into();
+                    let framerate = info.fps();
+                    let duration = Duration::from_secs_f64(
+                        framerate.numer() as f64 / framerate.denom() as f64,
+                    );
+
+                    // init wayland objects
+                    let output = Output::new(
+                        "HEADLESS-1".into(),
+                        PhysicalProperties {
+                            make: "Virtual".into(),
+                            model: "Sunrise".into(),
+                            size: (0, 0).into(),
+                            subpixel: Subpixel::Unknown,
+                        },
+                        log_clone.clone(),
+                    );
+                    let mode = OutputMode {
+                        size: size.into(),
+                        refresh: (duration.as_secs_f64() * 1000.0).round() as i32,
+                    };
+                    output.change_current_state(Some(mode), None, None, None);
+                    output.set_preferred(mode);
+                    let dtr = DamageTrackedRenderer::from_output(&output);
+
+                    data.state.space.map_output(&output, (0, 0));
+                    data.state.output = Some(output);
+                    data.state.dtr = Some(dtr);
+                    data.state.pointer_location = (size.w as f64 / 2.0, size.h as f64 / 2.0).into();
+                }
+                Event::Msg(Command::Buffer(dmabuf, buffer_ack)) => {
+                    if let Err(err) = data.state.create_frame(dmabuf) {
+                        slog::error!(data.state.log, "Rendering failed: {}", err);
+                    }
+                    let _ = buffer_ack.send(());
+                }
                 Event::Msg(Command::Quit) | Event::Closed => {
                     data.state.should_quit = true;
                 }
@@ -830,7 +842,7 @@ pub fn init(
                     client_fd: _,
                     display,
                 } => {
-                    let mut wm = X11WM::start_wm(
+                    let mut wm = X11Wm::start_wm(
                         data.state.handle.clone(),
                         dh.clone(),
                         connection,
@@ -855,68 +867,38 @@ pub fn init(
             );
         }
         xwayland
-            .start(event_loop.handle())
+            .start(
+                event_loop.handle(),
+                None,
+                std::iter::empty::<(OsString, OsString)>(),
+                |_| {},
+            )
             .expect("Failed to start Xwayland");
         xwayland
     };
 
     let mut data = Data { display, state };
-    while !data.state.should_quit {
-        event_loop
-            .dispatch(std::time::Duration::from_millis(16), &mut data)
-            .expect("Failed to dispatch event loop");
-        let next_buffer = data.state.create_frame().expect("Failed to render buffer");
-        for window in data.state.space.elements() {
-            window.send_frame(
-                &data.state.output,
-                data.state.start_time.elapsed(),
-                None,
-                |_, _| Some(data.state.output.clone()),
-            )
+    let signal = event_loop.get_signal();
+    if let Err(err) = event_loop.run(None, &mut data, |data| {
+        if let Some(output) = data.state.output.as_ref() {
+            for window in data.state.space.elements() {
+                window.send_frame(output, data.state.start_time.elapsed(), None, |_, _| {
+                    Some(output.clone())
+                })
+            }
         }
+
         data.display
             .flush_clients()
             .expect("Failed to flush clients");
-
-        let gst_buffer = {
-            data.state
-                .renderer
-                .bind(next_buffer)
-                .expect("Failed to bind dmabuf");
-            let mapping = data
-                .state
-                .renderer
-                .copy_framebuffer(Rectangle::from_loc_and_size(
-                    (0, 0),
-                    size.to_logical(1).to_buffer(1, Transform::Normal),
-                ))
-                .expect("Failed to copy");
-            let slice = data
-                .state
-                .renderer
-                .map_texture(&mapping)
-                .expect("Failed to map copy");
-            let mut buffer =
-                gst::Buffer::with_size(info.size()).expect("failed to create gst buffer");
-
-            {
-                let buffer = buffer.get_mut().unwrap();
-
-                let mut vframe =
-                    gst_video::VideoFrameRef::from_buffer_ref_writable(buffer, &info).unwrap();
-
-                let plane_data = vframe.plane_data_mut(0).unwrap();
-                plane_data.clone_from_slice(slice);
-            }
-
-            buffer
-        };
-        if buffer_tx.send(gst_buffer).is_err() {
-            break;
-        }
-
         data.state.space.refresh();
         data.state.popups.cleanup();
+
+        if data.state.should_quit {
+            signal.stop();
+        }
+    }) {
+        slog::error!(data.state.log, "Event loop broke: {}", err);
     }
 
     std::mem::drop(_egl_guard);

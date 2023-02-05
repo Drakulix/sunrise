@@ -1,5 +1,8 @@
 use gst::glib;
 
+pub mod allocators;
+pub mod buffer_pool;
+pub mod utils;
 mod waylandsrc;
 
 fn plugin_init(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {

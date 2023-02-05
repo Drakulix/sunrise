@@ -14,19 +14,22 @@ path = "src/lib.rs"
 [features]
 static = []
 capi = []
-doc = ["gst/v1_18"]
+doc = []
 
 [dependencies]
-gst = { version = "0.19.2", package="gstreamer" }
-gst-base = { version = "0.19.2", package="gstreamer-base" }
-#gst-allocators = { version = "0.19.2", package="gstreamer-allocators" }
-#gst-gl = { version = "0.19.2", package="gstreamer-gl" }
-gst-video = { version = "0.19.2", package="gstreamer-video" }
+gst = { version = "0.20", package = "gstreamer", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators", features = ["v1_18"] }
+gst-allocators = {version = "0.20", package = "gstreamer-allocators", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
+gst-base = {version = "0.20", package = "gstreamer-base", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
+gst-base-sys = {version = "0.20", package = "gstreamer-base-sys", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
+gst-sys = {version = "0.20", package = "gstreamer-sys", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators"}
+gst-video = { version = "0.20", package = "gstreamer-video", git = "https://gitlab.freedesktop.org/cmeissl/gstreamer-rs.git", branch = "allow_subclass_fd_allocators", features = ["v1_18"] }
 slog = "2.7.0"
+once_cell = "1.17.0"
+memfd = "0.6.2"
 
 [dependencies.smithay]
 git = "https://github.com/smithay/Smithay"
-rev = "49e423ec05"
+rev = "e9bdcb982f"
 default-features = false
 features = [ "backend_drm", "backend_gbm", "backend_egl", "backend_libinput", "backend_udev", "renderer_gl", "use_system_lib", "desktop", "wayland_frontend", "xwayland" ]
 

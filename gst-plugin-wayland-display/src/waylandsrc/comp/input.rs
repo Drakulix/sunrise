@@ -9,36 +9,36 @@ use smithay::{
     },
     input::{
         keyboard::FilterResult,
-        pointer::{AxisFrame, ButtonEvent, MotionEvent},
+        pointer::{AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent},
     },
     reexports::{
         input::LibinputInterface,
-        nix::{fcntl, fcntl::OFlag, sys::stat, unistd::close},
+        nix::{fcntl, fcntl::OFlag, sys::stat},
         wayland_server::protocol::wl_pointer,
     },
     utils::{Logical, Point, Serial, SERIAL_COUNTER},
 };
-use std::{os::unix::io::RawFd, path::Path};
+use std::{
+    os::{fd::FromRawFd, unix::io::OwnedFd},
+    path::Path,
+};
 
-pub struct NixInterface {
-    log: slog::Logger,
-}
+pub struct NixInterface;
 
 impl NixInterface {
-    pub fn new(log: impl Into<slog::Logger>) -> NixInterface {
-        NixInterface { log: log.into() }
+    pub fn new(_log: impl Into<slog::Logger>) -> NixInterface {
+        NixInterface
     }
 }
 
 impl LibinputInterface for NixInterface {
-    fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<RawFd, i32> {
+    fn open_restricted(&mut self, path: &Path, flags: i32) -> Result<OwnedFd, i32> {
         fcntl::open(path, OFlag::from_bits_truncate(flags), stat::Mode::empty())
+            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
             .map_err(|err| err as i32)
     }
-    fn close_restricted(&mut self, fd: RawFd) {
-        if let Err(err) = close(fd) {
-            slog::warn!(self.log, "Failed to close fd: {}", err);
-        }
+    fn close_restricted(&mut self, fd: OwnedFd) {
+        let _ = fd;
     }
 }
 
@@ -49,7 +49,7 @@ impl State {
                 let keycode = event.key_code();
                 let state = event.state();
                 let serial = SERIAL_COUNTER.next_serial();
-                let time = event.time();
+                let time = event.time_msec();
                 let keyboard = self.seat.get_keyboard().unwrap();
 
                 keyboard.input::<(), _>(
@@ -63,20 +63,33 @@ impl State {
             }
             InputEvent::PointerMotion { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
-                self.pointer_location += event.delta();
+                let delta = event.delta();
+                self.pointer_location += delta;
                 self.pointer_location = self.clamp_coords(self.pointer_location);
 
                 let pointer = self.seat.get_pointer().unwrap();
-                let under = self.space.element_under(self.pointer_location);
+                let under = self
+                    .space
+                    .element_under(self.pointer_location)
+                    .map(|(w, pos)| (w.clone().into(), pos));
                 pointer.motion(
                     self,
-                    under.map(|(w, pos)| (w.clone().into(), pos)),
+                    under.clone(),
                     &MotionEvent {
                         location: self.pointer_location,
                         serial,
-                        time: event.time(),
+                        time: event.time_msec(),
                     },
                 );
+                pointer.relative_motion(
+                    self,
+                    under,
+                    &RelativeMotionEvent {
+                        delta,
+                        delta_unaccel: event.delta_unaccel(),
+                        utime: event.time(),
+                    },
+                )
             }
             InputEvent::PointerButton { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
@@ -92,7 +105,7 @@ impl State {
                         button,
                         state: state.try_into().unwrap(),
                         serial,
-                        time: event.time(),
+                        time: event.time_msec(),
                     },
                 );
             }
@@ -107,7 +120,7 @@ impl State {
                 let vertical_amount_discrete = event.amount_discrete(Axis::Vertical);
 
                 {
-                    let mut frame = AxisFrame::new(event.time()).source(event.source());
+                    let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
                     if horizontal_amount != 0.0 {
                         frame = frame.value(Axis::Horizontal, horizontal_amount);
                         if let Some(discrete) = horizontal_amount_discrete {
@@ -132,15 +145,16 @@ impl State {
     }
 
     fn clamp_coords(&self, pos: Point<f64, Logical>) -> Point<f64, Logical> {
-        if let Some(mode) = self.output.current_mode() {
-            (
-                pos.x.max(0.0).min(mode.size.w as f64),
-                pos.y.max(0.0).min(mode.size.h as f64),
-            )
-                .into()
-        } else {
-            pos
+        if let Some(output) = self.output.as_ref() {
+            if let Some(mode) = output.current_mode() {
+                return (
+                    pos.x.max(0.0).min(mode.size.w as f64),
+                    pos.y.max(0.0).min(mode.size.h as f64),
+                )
+                    .into();
+            }
         }
+        pos
     }
 
     fn update_keyboard_focus(&mut self, serial: Serial) {
